@@ -1,0 +1,34 @@
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.coverage
+
+# Environment variables and secrets
+.env
+.env.*
+!.env.example
+
+# Uploaded contracts and local datasets
+uploads/
+data/
+*.pdf
+*.docx
+
+# Generated models and logs
+models/
+*.joblib
+*.pkl
+*.log
+
+# Node.js
+node_modules/
+dist/
+build/
+
+# IDE
+.idea/
+.vscode/
