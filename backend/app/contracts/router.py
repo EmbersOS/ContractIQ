@@ -46,11 +46,17 @@ async def upload_contract(
 ):
     """Upload a contract (PDF or DOCX ≤ 20 MB). Returns 202 immediately."""
     try:
-        # Read full content
-        raw = await file.read()
-
-        # Size check
         max_bytes: int = settings.MAX_UPLOAD_BYTES
+
+        # Fast reject if Content-Length header or UploadFile size reports oversized
+        if file.size is not None and file.size > max_bytes:
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail=f"File exceeds maximum allowed size of {max_bytes} bytes",
+            )
+
+        # Read up to max_bytes + 1 to prevent memory exhaustion DoS from huge uploads
+        raw = await file.read(max_bytes + 1)
         if len(raw) > max_bytes:
             raise HTTPException(
                 status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
@@ -75,14 +81,15 @@ async def upload_contract(
 
         mime_type = detected
 
-        # Persist to storage
+        # Persist to storage (using normalized forward slashes for storage keys)
         contract_id = new_uuid()
         ext = ".pdf" if mime_type == "application/pdf" else ".docx"
-        storage_path = os.path.join(current_user.id, f"{contract_id}{ext}")
+        storage_path = f"{current_user.id}/{contract_id}{ext}"
         storage.write_file(storage_path, raw)
 
-        # Create DB record
-        filename = file.filename or f"upload{ext}"
+        # Sanitize filename and create DB record
+        raw_name = os.path.basename(file.filename) if file.filename else f"upload{ext}"
+        filename = raw_name if raw_name else f"upload{ext}"
         contract = Contract(
             id=contract_id,
             owner_id=current_user.id,

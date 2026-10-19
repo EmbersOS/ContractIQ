@@ -157,3 +157,27 @@ def test_audit_only_returns_events_for_contract(client, auth_headers):
     events = resp.json()
     assert all(e["target_id"] == contract_id for e in events)
 
+
+def test_audit_viewer_forbidden_on_others_contract(client, auth_headers, sample_pdf_bytes):
+    owner_headers = auth_headers("reviewer")
+    viewer_headers = auth_headers("viewer")
+
+    # Owner uploads a contract
+    upload_resp = client.post(
+        "/contracts",
+        files={"file": ("contract.pdf", sample_pdf_bytes, "application/pdf")},
+        headers=owner_headers,
+    )
+    contract_id = upload_resp.json()["id"]
+
+    # Add a review event for this contract
+    client.post(
+        "/reviews",
+        json={"target_id": contract_id, "target_type": "contract", "action": "approve"},
+        headers=owner_headers,
+    )
+
+    # Different user (viewer) tries to read the audit trail
+    resp = client.get(f"/contracts/{contract_id}/audit", headers=viewer_headers)
+    assert resp.status_code == 403
+

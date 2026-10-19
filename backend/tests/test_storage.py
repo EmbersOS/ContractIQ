@@ -50,3 +50,12 @@ def test_path_traversal_rejected(storage):
     with pytest.raises(ValueError):
         storage.write_file("../../etc/passwd", b"evil")
 
+
+def test_prefix_collision_path_traversal_rejected(tmp_path):
+    """Paths matching base_dir prefix but escaping to sibling dir should be rejected."""
+    base = tmp_path / "uploads"
+    base.mkdir()
+    backend = LocalStorageBackend(base_dir=str(base))
+    with pytest.raises(ValueError):
+        backend.write_file("../uploads_fake/secret.txt", b"evil")
+

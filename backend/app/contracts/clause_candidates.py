@@ -3,6 +3,10 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from app.contracts.extractor import PageOffset
 
 
 @dataclass
@@ -12,6 +16,7 @@ class CandidateClause:
     char_start: int
     char_end: int
     matched_keyword: str
+    page_num: int = 1
 
 
 # Each entry: (clause_type, list_of_regex_patterns)
@@ -128,7 +133,18 @@ _COMPILED: list[tuple[str, list[tuple[str, re.Pattern[str]]]]] = [
 ]
 
 
-def find_clause_candidates(text: str) -> list[CandidateClause]:
+def _find_page_number(char_pos: int, page_offsets: list[PageOffset] | None) -> int:
+    if not page_offsets:
+        return 1
+    for po in page_offsets:
+        if po.char_start <= char_pos < po.char_end:
+            return po.page_num
+    return page_offsets[-1].page_num if page_offsets else 1
+
+
+def find_clause_candidates(
+    text: str, page_offsets: list[PageOffset] | None = None
+) -> list[CandidateClause]:
     """Scan *text* and return a list of CandidateClause matches.
 
     Uses pure regex — no ML. Each match records the span text inline
@@ -144,6 +160,7 @@ def find_clause_candidates(text: str) -> list[CandidateClause]:
                 if span in seen_spans:
                     continue
                 seen_spans.add(span)
+                page = _find_page_number(match.start(), page_offsets)
                 results.append(
                     CandidateClause(
                         clause_type=clause_type,
@@ -151,6 +168,7 @@ def find_clause_candidates(text: str) -> list[CandidateClause]:
                         char_start=match.start(),
                         char_end=match.end(),
                         matched_keyword=raw_pattern,
+                        page_num=page,
                     )
                 )
 
@@ -167,6 +185,7 @@ def candidates_to_dict(candidates: list[CandidateClause]) -> list[dict]:
             "char_start": c.char_start,
             "char_end": c.char_end,
             "matched_keyword": c.matched_keyword,
+            "page_num": c.page_num,
         }
         for c in candidates
     ]

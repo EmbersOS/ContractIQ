@@ -67,6 +67,12 @@ def get_contract_audit(
 ):
     """Return all review events for a specific contract in chronological order."""
     try:
+        from app.contracts.models import Contract
+
+        contract = db.query(Contract).filter(Contract.id == contract_id).first()
+        if contract is not None and contract.owner_id != current_user.id and current_user.role not in ("reviewer", "admin"):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
         events = (
             db.query(ReviewEvent)
             .filter(ReviewEvent.target_id == contract_id, ReviewEvent.target_type == "contract")
@@ -74,6 +80,8 @@ def get_contract_audit(
             .all()
         )
         return events
+    except HTTPException:
+        raise
     except Exception as exc:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc))
 

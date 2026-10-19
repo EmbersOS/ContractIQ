@@ -16,7 +16,10 @@ class LocalStorageBackend(StorageBackend):
     def _full_path(self, path: str) -> str:
         """Resolve *path* relative to base_dir, preventing path traversal."""
         full = os.path.abspath(os.path.join(self.base_dir, path))
-        if not full.startswith(self.base_dir):
+        try:
+            if os.path.commonpath([self.base_dir, full]) != self.base_dir:
+                raise ValueError(f"Path traversal detected: {path!r}")
+        except ValueError:
             raise ValueError(f"Path traversal detected: {path!r}")
         return full
 
