@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="ContractIQ contract clause and risk review workspace." />
+    <title>ContractIQ · Contract review workspace</title>
+    <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <section id="auth-view" class="auth-shell" aria-labelledby="auth-title">
+        <div class="auth-brand">
+          <div class="brand-mark" aria-hidden="true">CQ</div>
+          <div>
+            <p class="eyebrow">Contract intelligence</p>
+            <h1 id="auth-title">ContractIQ</h1>
+          </div>
+        </div>
+        <div class="auth-card">
+          <div class="auth-tabs" role="tablist" aria-label="Authentication mode">
+            <button id="login-tab" class="auth-tab is-active" type="button" role="tab" aria-selected="true">Sign in</button>
+            <button id="register-tab" class="auth-tab" type="button" role="tab" aria-selected="false">Create account</button>
+          </div>
+          <h2 id="auth-form-title">Welcome back</h2>
+          <p class="muted" id="auth-form-copy">Review uploaded contracts and supporting analysis.</p>
+          <form id="auth-form" novalidate>
+            <label class="field">
+              <span>Email</span>
+              <input id="auth-email" name="email" type="email" autocomplete="username" required placeholder="you@company.com" />
+            </label>
+            <label class="field">
+              <span>Password</span>
+              <input id="auth-password" name="password" type="password" autocomplete="current-password" required minlength="8" placeholder="At least 8 characters" />
+            </label>
+            <p id="auth-error" class="form-error" role="alert" hidden></p>
+            <button id="auth-submit" class="button button-primary button-block" type="submit">Sign in</button>
+          </form>
+        </div>
+        <p class="legal-note">ContractIQ provides automated decision support. Output is not legal advice.</p>
+      </section>
+
+      <div id="workspace" class="workspace" hidden>
+        <header class="topbar">
+          <div class="brand">
+            <div class="brand-mark small" aria-hidden="true">CQ</div>
+            <div>
+              <strong>ContractIQ</strong>
+              <span class="topbar-subtitle">Review workspace</span>
+            </div>
+          </div>
+          <div class="topbar-meta">
+            <span class="disclaimer-pill">Decision support · not legal advice</span>
+            <span id="role-label" class="role-label"></span>
+            <button id="sign-out" class="button button-ghost button-small" type="button">Sign out</button>
+          </div>
+        </header>
+
+        <div class="workspace-grid">
+          <aside class="sidebar" aria-label="Contracts">
+            <div class="sidebar-head">
+              <div>
+                <p class="eyebrow">Workspace</p>
+                <h2>Contracts</h2>
+              </div>
+              <span id="contract-count" class="count-pill">0</span>
+            </div>
+
+            <label class="upload-drop" for="file-input" id="upload-drop">
+              <span class="upload-icon" aria-hidden="true">+</span>
+              <span class="upload-title">Upload a contract</span>
+              <span class="upload-hint">PDF or DOCX · up to 20 MB</span>
+              <input id="file-input" type="file" accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document" hidden />
+            </label>
+            <div id="upload-status" class="inline-status" role="status" hidden></div>
+            <p id="upload-error" class="form-error" role="alert" hidden></p>
+
+            <div id="contract-list" class="contract-list" aria-live="polite"></div>
+          </aside>
+
+          <main class="main" id="main-content">
+            <div id="global-banner" class="banner banner-error" role="alert" hidden></div>
+
+            <section id="empty-workspace" class="empty-state">
+              <p class="eyebrow">Start here</p>
+              <h2>Upload a contract to begin review</h2>
+              <p class="muted">ContractIQ extracts clauses, applies deterministic risk rules, and keeps a human review trail. Uploaded files stay in your workspace.</p>
+              <label class="button button-primary" for="file-input">Choose a PDF or DOCX</label>
+            </section>
+
+            <section id="detail-view" hidden>
+              <div id="detail-header" class="detail-header"></div>
+              <div id="stat-grid" class="stat-grid"></div>
+
+              <div id="analysis-loading" class="loading-card" hidden>
+                <span class="spinner" aria-hidden="true"></span>
+                <span id="analysis-loading-copy">Loading analysis…</span>
+              </div>
+
+              <div id="analysis-error" class="banner banner-error" role="alert" hidden></div>
+
+              <div id="analysis-grid" class="analysis-grid" hidden>
+                <section class="panel clauses-panel" aria-labelledby="clauses-heading">
+                  <div class="panel-head">
+                    <div>
+                      <p class="eyebrow">Classification</p>
+                      <h2 id="clauses-heading">Detected clauses</h2>
+                    </div>
+                    <span id="clause-count" class="count-pill">0</span>
+                  </div>
+                  <div id="clause-filters" class="filter-row" role="group" aria-label="Filter clauses"></div>
+                  <div id="clause-list" class="clause-list"></div>
+                </section>
+
+                <section class="panel source-panel" aria-labelledby="source-heading">
+                  <div class="panel-head">
+                    <div>
+                      <p class="eyebrow">Extracted document</p>
+                      <h2 id="source-heading">Source text</h2>
+                    </div>
+                    <span id="source-label" class="source-label"></span>
+                  </div>
+                  <div id="source-view" class="source-view"></div>
+                </section>
+
+                <section class="panel insights-panel" aria-labelledby="risks-heading">
+                  <div class="panel-head">
+                    <div>
+                      <p class="eyebrow">Deterministic rules</p>
+                      <h2 id="risks-heading">Risk findings</h2>
+                    </div>
+                    <span id="risk-count" class="count-pill">0</span>
+                  </div>
+                  <div id="risk-list" class="risk-list"></div>
+
+                  <div class="divider"></div>
+
+                  <div class="panel-head">
+                    <div>
+                      <p class="eyebrow">Human-in-the-loop</p>
+                      <h2>Review decision</h2>
+                    </div>
+                  </div>
+                  <p class="muted small">Record a review decision for this contract. Events are append-only.</p>
+                  <label class="field compact">
+                    <span>Notes <span class="muted">(optional)</span></span>
+                    <textarea id="review-notes" rows="3" maxlength="2000" placeholder="Add context for the review trail"></textarea>
+                  </label>
+                  <div id="review-summary" class="review-summary"></div>
+                  <div id="review-actions" class="review-actions"></div>
+                  <div id="review-timeline" class="timeline"></div>
+                </section>
+              </div>
+            </section>
+          </main>
+        </div>
+      </div>
+    </div>
+
+    <div id="toast-region" class="toast-region" aria-live="polite" aria-atomic="false"></div>
+    <script type="module" src="./js/app.js"></script>
+  </body>
+</html>
