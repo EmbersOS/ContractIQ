@@ -3,8 +3,25 @@ from __future__ import annotations
 
 import pytest
 
-from app.clauses.span_extractor import extract_span_for_clause
+from app.clauses.span_extractor import extract_candidate_passage, extract_span_for_clause
 from ml.evaluate import VAL_BENCHMARK_SAMPLES
+
+
+def test_candidate_passage_extends_short_heading_and_preserves_offsets():
+    text = "1. TERMINATION. Either party may terminate with written notice."
+
+    span, start, end = extract_candidate_passage(text, text.index("TERMINATION"), text.index("TERMINATION") + len("TERMINATION"))
+
+    assert "Either party may terminate" in span
+    assert span == text[start:end]
+
+
+def test_candidate_passage_rejects_invalid_offsets():
+    text = "1. TERMINATION. Body."
+
+    assert extract_candidate_passage(text, -1, 2) == ("", 0, 0)
+    assert extract_candidate_passage(text, 4, 4) == ("", 0, 0)
+    assert extract_candidate_passage(text, 4, len(text) + 1) == ("", 0, 0)
 
 
 @pytest.mark.parametrize(

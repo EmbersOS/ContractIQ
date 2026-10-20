@@ -9,7 +9,6 @@ from typing import Any
 
 from ml.dataset import get_split_contracts, load_cuad, make_splits
 from ml.metrics import compute_classification_metrics, exact_match_score, span_iou_score, token_f1_score
-from ml.preprocess import clean_contract_text
 
 VAL_BENCHMARK_SAMPLES = [
     {
@@ -192,38 +191,46 @@ def evaluate_regex_baseline(samples: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def evaluate_tfidf_baseline(pipeline: Any, samples: list[dict[str, Any]]) -> dict[str, Any]:
-    """Evaluate P1 TF-IDF + Logistic Regression Classifier on evaluation samples."""
-    from app.clauses.span_extractor import extract_span_for_clause
+    """Evaluate P1 by classifying candidate passages, not whole contracts."""
+    from app.clauses.inference import predict_candidate_clauses
 
     y_true: list[str] = []
     y_pred: list[str] = []
     em_scores: list[float] = []
     f1_scores: list[float] = []
     iou_scores: list[float] = []
-    cleaned_by_contract: dict[str, str] = {}
+    predictions_by_contract: dict[str, list[Any]] = {}
 
-    for s in samples:
-        gold_type = s["gold_type"]
-        gold_span = s["gold_span"]
-        gold_offsets = (s["char_start"], s["char_end"])
-        y_true.append(gold_type)
+    for sample in samples:
+        key = str(sample.get("contract_id") or sample["text"])
+        if key not in predictions_by_contract:
+            predictions_by_contract[key] = predict_candidate_clauses(pipeline, sample["text"])
 
-        contract_id = str(s.get("contract_id", ""))
-        if contract_id and contract_id in cleaned_by_contract:
-            text = cleaned_by_contract[contract_id]
+        gold_offsets = (sample["char_start"], sample["char_end"])
+        y_true.append(sample["gold_type"])
+
+        best = None
+        best_iou = 0.0
+        for candidate in predictions_by_contract[key]:
+            iou = span_iou_score((candidate.char_start, candidate.char_end), gold_offsets)
+            if iou > best_iou or (
+                iou == best_iou and best is not None and candidate.confidence > best.confidence
+            ):
+                best = candidate
+                best_iou = iou
+
+        if best is None or best_iou <= 0:
+            y_pred.append("None")
+            pred_span = ""
+            pred_offsets = (0, 0)
         else:
-            text = clean_contract_text(s["text"])
-            if contract_id:
-                cleaned_by_contract[contract_id] = text
-        pred_type = pipeline.predict([text])[0]
-        y_pred.append(pred_type)
+            y_pred.append(best.clause_type)
+            pred_span = best.span_text
+            pred_offsets = (best.char_start, best.char_end)
 
-        # Use rule-based anchor span extraction for the predicted type
-        span_text, p_start, p_end = extract_span_for_clause(s["text"], pred_type)
-
-        em_scores.append(exact_match_score(span_text, gold_span))
-        f1_scores.append(token_f1_score(span_text, gold_span))
-        iou_scores.append(span_iou_score((p_start, p_end), gold_offsets))
+        em_scores.append(exact_match_score(pred_span, sample["gold_span"]))
+        f1_scores.append(token_f1_score(pred_span, sample["gold_span"]))
+        iou_scores.append(span_iou_score(pred_offsets, gold_offsets))
 
     evaluated_labels = sorted(set(y_true))
     cls_metrics = compute_classification_metrics(y_true, y_pred, labels=evaluated_labels)

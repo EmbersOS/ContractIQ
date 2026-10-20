@@ -6,7 +6,7 @@ import json
 import pytest
 
 from ml.dataset import get_split_contracts, load_cuad, make_splits, verify_no_overlap
-from ml.evaluate import extract_held_out_samples, load_cuad_evaluation_data
+from ml.evaluate import evaluate_tfidf_baseline, extract_held_out_samples, load_cuad_evaluation_data
 from ml.metrics import compute_classification_metrics, exact_match_score, span_iou_score, token_f1_score
 from ml.preprocess import GuardedSplitContext, LeakageError, chunk_text, clean_contract_text
 from ml.train_classifier import CUAD_CATEGORY_TO_TARGET, target_clause_for_question, train_classifier
@@ -123,6 +123,39 @@ def test_held_out_samples_repair_invalid_answer_offsets():
     )
 
     assert samples[0]["char_start"] == context.index("Either party may terminate with notice.")
+
+
+class _RecordingPipeline:
+    def __init__(self) -> None:
+        self.inputs: list[str] = []
+
+    def predict(self, texts: list[str]) -> list[str]:
+        self.inputs.extend(texts)
+        return ["Limitation of Liability" for _ in texts]
+
+    def predict_proba(self, texts: list[str]) -> list[list[float]]:
+        return [[0.1, 0.9] for _ in texts]
+
+
+def test_tfidf_evaluation_classifies_candidate_passages_not_whole_contracts():
+    text = "1. LIMITATION OF LIABILITY. Supplier has unlimited liability for all claims."
+    gold_span = text[text.index("Supplier") :]
+    sample = {
+        "contract_id": "contract-1",
+        "text": text,
+        "gold_type": "Limitation of Liability",
+        "gold_span": gold_span,
+        "char_start": text.index(gold_span),
+        "char_end": len(text),
+    }
+    pipeline = _RecordingPipeline()
+
+    result = evaluate_tfidf_baseline(pipeline, [sample])
+
+    assert result["macro_f1"] == 1.0
+    assert result["span_metrics"]["mean_span_iou"] > 0
+    assert pipeline.inputs
+    assert all(value != text for value in pipeline.inputs)
 
 
 def test_cuad_paragraphs_from_one_contract_share_a_split(tmp_path):

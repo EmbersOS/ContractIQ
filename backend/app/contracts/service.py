@@ -9,8 +9,8 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.clauses.inference import predict_candidate_clauses
 from app.clauses.models import ClausePrediction
-from app.clauses.span_extractor import extract_span_for_clause
 from app.contracts.clause_candidates import candidates_to_dict, find_clause_candidates
 from app.contracts.extractor import extract_docx, extract_pdf
 from app.contracts.models import Contract
@@ -26,34 +26,19 @@ def _get_classifier() -> Any:
     return train_classifier(SAMPLE_TRAIN_CORPUS)
 
 
-def _prediction_confidence(classifier: Any, span_text: str) -> float:
-    if not hasattr(classifier, "predict_proba"):
-        return 1.0
-    return float(max(classifier.predict_proba([span_text])[0]))
-
-
 def _persist_clause_analysis(
-    db: Session, contract: Contract, text: str, candidate_types: set[str]
+    db: Session, contract: Contract, text: str
 ) -> list[ClausePrediction]:
-    """Classify heading-bounded clause bodies and persist idempotent predictions."""
-    if not text.strip() or not candidate_types:
-        return []
-
-    classifier = _get_classifier()
+    """Classify candidate passages and persist idempotent predictions."""
     predictions: list[ClausePrediction] = []
-    for candidate_type in sorted(candidate_types):
-        span_text, char_start, char_end = extract_span_for_clause(text, candidate_type)
-        if not span_text:
-            continue
-
-        clause_type = str(classifier.predict([span_text])[0])
+    for candidate in predict_candidate_clauses(_get_classifier(), text):
         prediction = (
             db.query(ClausePrediction)
             .filter(
                 ClausePrediction.contract_id == contract.id,
-                ClausePrediction.clause_type == clause_type,
-                ClausePrediction.char_start == char_start,
-                ClausePrediction.char_end == char_end,
+                ClausePrediction.clause_type == candidate.clause_type,
+                ClausePrediction.char_start == candidate.char_start,
+                ClausePrediction.char_end == candidate.char_end,
                 ClausePrediction.prediction_source == "tfidf_classifier",
             )
             .first()
@@ -61,11 +46,11 @@ def _persist_clause_analysis(
         if prediction is None:
             prediction = ClausePrediction(
                 contract_id=contract.id,
-                clause_type=clause_type,
-                span_text=span_text,
-                char_start=char_start,
-                char_end=char_end,
-                confidence=_prediction_confidence(classifier, span_text),
+                clause_type=candidate.clause_type,
+                span_text=candidate.span_text,
+                char_start=candidate.char_start,
+                char_end=candidate.char_end,
+                confidence=candidate.confidence,
                 prediction_source="tfidf_classifier",
                 model_version="p1-tfidf-logreg",
             )
@@ -114,12 +99,7 @@ def process_contract(contract_id: str, storage: StorageBackend, db: Session | No
 
             # Identify clause candidates with page offsets
             candidates = find_clause_candidates(result.text, result.page_offsets)
-            _persist_clause_analysis(
-                db,
-                contract,
-                result.text,
-                {candidate.clause_type for candidate in candidates},
-            )
+            _persist_clause_analysis(db, contract, result.text)
 
             # Update contract in DB
             contract.extracted_text = result.text

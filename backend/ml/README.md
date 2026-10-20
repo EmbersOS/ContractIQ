@@ -33,8 +33,9 @@ python -m ml.evaluate --model all --split val --cuad-path data/cuad/CUAD_v1.json
 ```
 
 The split is deterministic and contract-level (seed 42, 70/15/15). The classifier
-is fitted only on train contracts. Use `--split test` only once, with
-`--confirm-test-run`, after validation decisions are frozen.
+is fitted only on train contracts. P1 classifies regex-anchored candidate passages,
+and predicted offsets remain relative to the original contract text. Use
+`--split test` only once, with `--confirm-test-run`, after validation decisions are frozen.
 
 Without `--cuad-path`, the script falls back to the synthetic benchmark and marks
 `held_out_contracts: false` in the result JSON.

@@ -69,6 +69,57 @@ _SECTION_HEADING_RE = re.compile(
 )
 
 
+_PASSAGE_TERMINATORS = ".!?;\n\r"
+
+
+def extract_candidate_passage(
+    source_text: str,
+    char_start: int,
+    char_end: int,
+    max_chars: int = 1000,
+    min_chars: int = 120,
+) -> tuple[str, int, int]:
+    """Return a sentence-like passage around a keyword match with raw offsets."""
+    if not source_text or char_start < 0 or char_end > len(source_text) or char_start >= char_end:
+        return "", 0, 0
+
+    left = max(source_text.rfind(char, 0, char_start) for char in _PASSAGE_TERMINATORS)
+    right_boundaries = [
+        position
+        for position in (source_text.find(char, char_end) for char in _PASSAGE_TERMINATORS)
+        if position != -1
+    ]
+    right = min(right_boundaries) if right_boundaries else len(source_text) - 1
+
+    start = left + 1
+    end = right + 1
+
+    # Short headings need the following sentence(s) to form a useful passage.
+    while end - start < min_chars and end < len(source_text):
+        following = [
+            position
+            for position in (source_text.find(char, end) for char in _PASSAGE_TERMINATORS)
+            if position != -1
+        ]
+        if not following:
+            break
+        end = min(following) + 1
+
+    if end - start > max_chars:
+        start = max(start, char_start - max_chars // 2)
+        end = min(end, start + max_chars)
+        start = max(0, end - max_chars)
+
+    while start < end and source_text[start].isspace():
+        start += 1
+    while end > start and source_text[end - 1].isspace():
+        end -= 1
+
+    if start >= end:
+        return "", 0, 0
+    return source_text[start:end], start, end
+
+
 def extract_span_for_clause(source_text: str, predicted_clause_type: str) -> tuple[str, int, int]:
     """Return a predicted clause body and its raw-source character offsets.
 
