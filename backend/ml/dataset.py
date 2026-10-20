@@ -29,10 +29,11 @@ def load_cuad(cuad_path: str | Path) -> list[dict[str, Any]]:
     for idx, item in enumerate(items):
         title = item.get("title", f"contract_{idx}")
         paragraphs = item.get("paragraphs", [])
-        for p_idx, para in enumerate(paragraphs):
+        for para in paragraphs:
             context = para.get("context", "")
             qas = para.get("qas", [])
-            contract_id = f"{title}__{p_idx}" if len(paragraphs) > 1 else title
+            # Keep every paragraph from one source contract in the same split.
+            contract_id = f"{title}__{idx}"
             contracts.append(
                 {
                     "contract_id": contract_id,
