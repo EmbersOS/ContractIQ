@@ -7,9 +7,9 @@ import pytest
 
 from ml.dataset import get_split_contracts, load_cuad, make_splits, verify_no_overlap
 from ml.evaluate import extract_held_out_samples, load_cuad_evaluation_data
-from ml.metrics import exact_match_score, span_iou_score, token_f1_score
+from ml.metrics import compute_classification_metrics, exact_match_score, span_iou_score, token_f1_score
 from ml.preprocess import GuardedSplitContext, LeakageError, chunk_text, clean_contract_text
-from ml.train_classifier import train_classifier
+from ml.train_classifier import CUAD_CATEGORY_TO_TARGET, target_clause_for_question, train_classifier
 
 
 def _cuad_fixture() -> dict[str, object]:
@@ -30,16 +30,16 @@ def _cuad_fixture() -> dict[str, object]:
 
 def _cuad_eval_fixture() -> dict[str, object]:
     clauses = [
-        ("Limitation of Liability", "Aggregate liability shall not exceed the fees paid."),
-        ("Indemnification", "Supplier shall indemnify and hold harmless Customer."),
-        ("Termination", "Either party may terminate for material breach."),
+        ("Cap On Liability", "Aggregate liability shall not exceed the fees paid."),
+        ("Ip Ownership Assignment", "Supplier assigns all developed code to Customer."),
+        ("Termination For Convenience", "Either party may terminate for convenience."),
         ("Governing Law", "This agreement is governed by the laws of New York."),
-        ("Confidentiality", "Each party shall keep proprietary information confidential."),
-        ("Warranty", "Services are provided without warranties of merchantability."),
+        ("Non-Compete", "Supplier shall not compete in the same market."),
+        ("Warranty Duration", "Warranty coverage lasts for twelve months."),
     ]
     data = []
-    for index, (clause_type, span) in enumerate(clauses):
-        context = f"{index + 1}. {clause_type.upper()}. {span}\n{index + 2}. DEFINITIONS. Terms are defined here."
+    for index, (category, span) in enumerate(clauses):
+        context = f"{index + 1}. {category.upper()}. {span}\n{index + 2}. DEFINITIONS. Terms are defined here."
         data.append(
             {
                 "title": f"contract-{index}",
@@ -48,7 +48,10 @@ def _cuad_eval_fixture() -> dict[str, object]:
                         "context": context,
                         "qas": [
                             {
-                                "question": f"What is the {clause_type} clause?",
+                                "question": (
+                                    'Highlight the parts (if any) of this contract related to '
+                                    f'"{category}" that should be reviewed by a lawyer.'
+                                ),
                                 "answers": [{"text": span, "answer_start": context.index(span)}],
                             }
                         ],
@@ -59,22 +62,47 @@ def _cuad_eval_fixture() -> dict[str, object]:
     return {"data": data}
 
 
+def test_cuad_category_mapping_uses_official_labels_only():
+    assert target_clause_for_question('related to "Cap On Liability"') == "Limitation of Liability"
+    assert target_clause_for_question('related to "Uncapped Liability"') == "Limitation of Liability"
+    assert target_clause_for_question('related to "Warranty Duration"') == "Warranty"
+    assert target_clause_for_question(
+        'related to "Covenant Not To Sue". Details: ownership of intellectual property'
+    ) is None
+    assert set(CUAD_CATEGORY_TO_TARGET.values()) <= {
+        "Limitation of Liability",
+        "Termination",
+        "Governing Law",
+        "Non-Compete",
+        "Warranty",
+        "Intellectual Property",
+    }
+
+
 def test_cuad_evaluation_uses_only_held_out_contracts(tmp_path):
     path = tmp_path / "cuad-eval.json"
     path.write_text(json.dumps(_cuad_eval_fixture()), encoding="utf-8")
     contracts = load_cuad(path)
     splits = make_splits(contracts)
 
-    train_examples, samples = load_cuad_evaluation_data(path, "val")
+    train_examples, samples, split_counts = load_cuad_evaluation_data(path, "val")
 
     assert train_examples
     assert samples
+    assert split_counts == {name: len(ids) for name, ids in splits.items()}
     sample_ids = {sample["contract_id"] for sample in samples}
     assert sample_ids <= set(splits["val"])
     assert not sample_ids & set(splits["train"])
     assert not sample_ids & set(splits["test"])
     for sample in samples:
         assert sample["text"][sample["char_start"] : sample["char_end"]] == sample["gold_span"]
+
+    spans_by_contract = {
+        contract["contract_id"]: contract["qas"][0]["answers"][0]["text"] for contract in contracts
+    }
+    train_span_texts = {text for text, _ in train_examples}
+    assert train_span_texts <= {spans_by_contract[contract_id] for contract_id in splits["train"]}
+    assert not train_span_texts & {spans_by_contract[contract_id] for contract_id in splits["val"]}
 
 
 def test_held_out_samples_repair_invalid_answer_offsets():
@@ -86,7 +114,7 @@ def test_held_out_samples_repair_invalid_answer_offsets():
                 "context": context,
                 "qas": [
                     {
-                        "question": "What is the termination clause?",
+                        "question": 'Highlight the parts related to "Termination For Convenience".',
                         "answers": [{"text": "Either party may terminate with notice.", "answer_start": 9999}],
                     }
                 ],
@@ -131,6 +159,13 @@ def test_preprocessing_and_metrics():
     assert exact_match_score("Net-30", "net 30") == 1.0
     assert token_f1_score("a b", "a c") == 0.5
     assert span_iou_score((2, 8), (5, 10)) == 0.375
+
+
+def test_macro_f1_can_be_scoped_to_labels_with_gold_support():
+    metrics = compute_classification_metrics(["A", "A"], ["A", "B"], labels=["A"])
+
+    assert metrics["macro_f1"] == 0.6667
+    assert set(metrics["per_class"]) == {"A"}
 
 
 def test_training_guard_rejects_non_training_splits():

@@ -87,15 +87,14 @@ VAL_BENCHMARK_SAMPLES = [
 
 def extract_held_out_samples(contracts: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Build evaluation samples only from the supplied (held-out) contracts."""
-    from ml.train_classifier import TARGET_CLAUSES
+    from ml.train_classifier import target_clause_for_question
 
     samples: list[dict[str, Any]] = []
     for contract in contracts:
         context = contract.get("context", "")
         contract_id = contract.get("contract_id", "")
         for qa in contract.get("qas", []):
-            question = qa.get("question", "").lower()
-            gold_type = next((tc for tc in TARGET_CLAUSES if tc.lower() in question), None)
+            gold_type = target_clause_for_question(qa.get("question", ""))
             if gold_type is None:
                 continue
 
@@ -125,15 +124,16 @@ def extract_held_out_samples(contracts: list[dict[str, Any]]) -> list[dict[str, 
 
 def load_cuad_evaluation_data(
     cuad_path: str | Path, split: str
-) -> tuple[list[tuple[str, str]], list[dict[str, Any]]]:
-    """Return train-only examples plus samples from a genuinely held-out split."""
+) -> tuple[list[tuple[str, str]], list[dict[str, Any]], dict[str, int]]:
+    """Return train-only examples, held-out samples, and contract split counts."""
     from ml.train_classifier import extract_training_examples
 
     contracts = load_cuad(cuad_path)
     splits = make_splits(contracts)
     train_examples = extract_training_examples(get_split_contracts(contracts, splits, "train"))
     samples = extract_held_out_samples(get_split_contracts(contracts, splits, split))
-    return train_examples, samples
+    split_counts = {name: len(contract_ids) for name, contract_ids in splits.items()}
+    return train_examples, samples, split_counts
 
 
 def evaluate_regex_baseline(samples: list[dict[str, Any]]) -> dict[str, Any]:
@@ -174,12 +174,14 @@ def evaluate_regex_baseline(samples: list[dict[str, Any]]) -> dict[str, Any]:
         f1_scores.append(token_f1_score(pred_span, gold_span))
         iou_scores.append(span_iou_score(pred_offsets, gold_offsets))
 
-    cls_metrics = compute_classification_metrics(y_true, y_pred)
+    evaluated_labels = sorted(set(y_true))
+    cls_metrics = compute_classification_metrics(y_true, y_pred, labels=evaluated_labels)
 
     return {
         "model": "P0_Regex_Baseline",
         "num_samples": len(samples),
         "macro_f1": cls_metrics["macro_f1"],
+        "evaluated_labels": evaluated_labels,
         "classification": cls_metrics,
         "span_metrics": {
             "mean_exact_match": round(sum(em_scores) / len(em_scores), 4) if em_scores else 0.0,
@@ -198,6 +200,7 @@ def evaluate_tfidf_baseline(pipeline: Any, samples: list[dict[str, Any]]) -> dic
     em_scores: list[float] = []
     f1_scores: list[float] = []
     iou_scores: list[float] = []
+    cleaned_by_contract: dict[str, str] = {}
 
     for s in samples:
         gold_type = s["gold_type"]
@@ -205,7 +208,13 @@ def evaluate_tfidf_baseline(pipeline: Any, samples: list[dict[str, Any]]) -> dic
         gold_offsets = (s["char_start"], s["char_end"])
         y_true.append(gold_type)
 
-        text = clean_contract_text(s["text"])
+        contract_id = str(s.get("contract_id", ""))
+        if contract_id and contract_id in cleaned_by_contract:
+            text = cleaned_by_contract[contract_id]
+        else:
+            text = clean_contract_text(s["text"])
+            if contract_id:
+                cleaned_by_contract[contract_id] = text
         pred_type = pipeline.predict([text])[0]
         y_pred.append(pred_type)
 
@@ -216,12 +225,14 @@ def evaluate_tfidf_baseline(pipeline: Any, samples: list[dict[str, Any]]) -> dic
         f1_scores.append(token_f1_score(span_text, gold_span))
         iou_scores.append(span_iou_score((p_start, p_end), gold_offsets))
 
-    cls_metrics = compute_classification_metrics(y_true, y_pred)
+    evaluated_labels = sorted(set(y_true))
+    cls_metrics = compute_classification_metrics(y_true, y_pred, labels=evaluated_labels)
 
     return {
         "model": "P1_TFIDF_LogisticRegression",
         "num_samples": len(samples),
         "macro_f1": cls_metrics["macro_f1"],
+        "evaluated_labels": evaluated_labels,
         "classification": cls_metrics,
         "span_metrics": {
             "mean_exact_match": round(sum(em_scores) / len(em_scores), 4) if em_scores else 0.0,
@@ -285,7 +296,7 @@ def main() -> None:
         if not cuad_path.exists():
             print(f"ERROR: CUAD dataset not found at {cuad_path}", file=sys.stderr)
             sys.exit(1)
-        train_examples, samples = load_cuad_evaluation_data(cuad_path, args.split)
+        train_examples, samples, split_counts = load_cuad_evaluation_data(cuad_path, args.split)
         train_examples = train_examples or SAMPLE_TRAIN_CORPUS
         dataset_name = "cuad"
         held_out_contracts = True
@@ -295,13 +306,19 @@ def main() -> None:
     else:
         train_examples = SAMPLE_TRAIN_CORPUS
         samples = VAL_BENCHMARK_SAMPLES
+        split_counts = {}
         dataset_name = "synthetic_benchmark"
         held_out_contracts = False
 
     provenance = {
         "dataset": dataset_name,
+        "dataset_version": "CUAD v1" if dataset_name == "cuad" else None,
+        "dataset_source": "https://zenodo.org/records/4595826" if dataset_name == "cuad" else None,
+        "license": "CC BY 4.0" if dataset_name == "cuad" else None,
         "split": args.split,
         "held_out_contracts": held_out_contracts,
+        "split_contract_counts": split_counts,
+        "num_eval_contracts": len({sample.get("contract_id") for sample in samples if sample.get("contract_id")}),
     }
 
     if args.model in ("p0", "all"):

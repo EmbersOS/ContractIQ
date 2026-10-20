@@ -21,8 +21,9 @@ data/
 *.pdf
 *.docx
 
-# Generated models and logs
+# Generated models, metrics, and logs
 models/
+backend/ml/results/
 *.joblib
 *.pkl
 *.log

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +23,29 @@ TARGET_CLAUSES = [
     "Payment Terms",
     "Dispute Resolution",
 ]
+
+# Explicit mapping from official CUAD v1 labels to this project's clause categories.
+# Categories without a faithful CUAD equivalent are intentionally not mapped.
+CUAD_CATEGORY_TO_TARGET = {
+    "Cap On Liability": "Limitation of Liability",
+    "Uncapped Liability": "Limitation of Liability",
+    "Termination For Convenience": "Termination",
+    "Governing Law": "Governing Law",
+    "Non-Compete": "Non-Compete",
+    "Warranty Duration": "Warranty",
+    "Ip Ownership Assignment": "Intellectual Property",
+}
+
+_CUAD_QUESTION_RE = re.compile(r'related to "([^"]+)"')
+
+
+def target_clause_for_question(question: str) -> str | None:
+    """Return the mapped target category for an official CUAD question."""
+    match = _CUAD_QUESTION_RE.search(question)
+    if match is None:
+        return None
+    return CUAD_CATEGORY_TO_TARGET.get(match.group(1))
+
 
 # Seed corpus for training/testing when offline or CUAD raw file is not present
 SAMPLE_TRAIN_CORPUS = [
@@ -53,15 +77,8 @@ def extract_training_examples(contracts: list[dict[str, Any]]) -> list[tuple[str
     """Extract (chunk_or_span_text, clause_type) pairs from loaded contracts."""
     examples: list[tuple[str, str]] = []
     for c in contracts:
-        context = c.get("context", "")
         for qa in c.get("qas", []):
-            question = qa.get("question", "")
-            # Match question to clause type
-            matched_type = None
-            for tc in TARGET_CLAUSES:
-                if tc.lower() in question.lower():
-                    matched_type = tc
-                    break
+            matched_type = target_clause_for_question(qa.get("question", ""))
             if not matched_type:
                 continue
 
