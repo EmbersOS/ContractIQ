@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from ml.dataset import get_split_contracts, load_cuad, make_splits
 from ml.metrics import compute_classification_metrics, exact_match_score, span_iou_score, token_f1_score
 from ml.preprocess import clean_contract_text
 
@@ -82,6 +83,57 @@ VAL_BENCHMARK_SAMPLES = [
         "char_end": 88,
     },
 ]
+
+
+def extract_held_out_samples(contracts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Build evaluation samples only from the supplied (held-out) contracts."""
+    from ml.train_classifier import TARGET_CLAUSES
+
+    samples: list[dict[str, Any]] = []
+    for contract in contracts:
+        context = contract.get("context", "")
+        contract_id = contract.get("contract_id", "")
+        for qa in contract.get("qas", []):
+            question = qa.get("question", "").lower()
+            gold_type = next((tc for tc in TARGET_CLAUSES if tc.lower() in question), None)
+            if gold_type is None:
+                continue
+
+            for answer in qa.get("answers", []):
+                gold_span = str(answer.get("text", "")).strip()
+                if not gold_span:
+                    continue
+
+                start = answer.get("answer_start")
+                if not isinstance(start, int) or start < 0 or context[start : start + len(gold_span)] != gold_span:
+                    start = context.find(gold_span)
+                if start < 0:
+                    continue
+
+                samples.append(
+                    {
+                        "contract_id": contract_id,
+                        "text": context,
+                        "gold_type": gold_type,
+                        "gold_span": gold_span,
+                        "char_start": start,
+                        "char_end": start + len(gold_span),
+                    }
+                )
+    return samples
+
+
+def load_cuad_evaluation_data(
+    cuad_path: str | Path, split: str
+) -> tuple[list[tuple[str, str]], list[dict[str, Any]]]:
+    """Return train-only examples plus samples from a genuinely held-out split."""
+    from ml.train_classifier import extract_training_examples
+
+    contracts = load_cuad(cuad_path)
+    splits = make_splits(contracts)
+    train_examples = extract_training_examples(get_split_contracts(contracts, splits, "train"))
+    samples = extract_held_out_samples(get_split_contracts(contracts, splits, split))
+    return train_examples, samples
 
 
 def evaluate_regex_baseline(samples: list[dict[str, Any]]) -> dict[str, Any]:
@@ -194,6 +246,12 @@ def main() -> None:
         help="Required explicit confirmation flag to evaluate on the frozen test split",
     )
     parser.add_argument(
+        "--cuad-path",
+        type=str,
+        default=None,
+        help="Path to CUAD v1 JSON; enables contract-level held-out evaluation",
+    )
+    parser.add_argument(
         "--model",
         type=str,
         default="p0",
@@ -220,10 +278,34 @@ def main() -> None:
     out_dir = Path(args.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    samples = VAL_BENCHMARK_SAMPLES
+    from ml.train_classifier import SAMPLE_TRAIN_CORPUS, train_classifier
+
+    if args.cuad_path:
+        cuad_path = Path(args.cuad_path)
+        if not cuad_path.exists():
+            print(f"ERROR: CUAD dataset not found at {cuad_path}", file=sys.stderr)
+            sys.exit(1)
+        train_examples, samples = load_cuad_evaluation_data(cuad_path, args.split)
+        train_examples = train_examples or SAMPLE_TRAIN_CORPUS
+        dataset_name = "cuad"
+        held_out_contracts = True
+        if not samples:
+            print(f"ERROR: No evaluation samples found in the {args.split} split.", file=sys.stderr)
+            sys.exit(1)
+    else:
+        train_examples = SAMPLE_TRAIN_CORPUS
+        samples = VAL_BENCHMARK_SAMPLES
+        dataset_name = "synthetic_benchmark"
+        held_out_contracts = False
+
+    provenance = {
+        "dataset": dataset_name,
+        "split": args.split,
+        "held_out_contracts": held_out_contracts,
+    }
 
     if args.model in ("p0", "all"):
-        p0_results = evaluate_regex_baseline(samples)
+        p0_results = {**evaluate_regex_baseline(samples), **provenance}
         p0_path = out_dir / f"{args.split}_p0_baseline.json" if args.split != "val" else out_dir / "p0_baseline.json"
         with open(p0_path, "w", encoding="utf-8") as f:
             json.dump(p0_results, f, indent=2)
@@ -231,11 +313,9 @@ def main() -> None:
         print(f"  Macro F1: {p0_results['macro_f1']}, Span-IoU: {p0_results['span_metrics']['mean_span_iou']}")
 
     if args.model in ("p1", "all"):
-        from ml.train_classifier import SAMPLE_TRAIN_CORPUS, train_classifier
-
         clf_path = out_dir / "tfidf_classifier.joblib"
-        pipeline = train_classifier(SAMPLE_TRAIN_CORPUS, split="train", output_path=clf_path)
-        p1_results = evaluate_tfidf_baseline(pipeline, samples)
+        pipeline = train_classifier(train_examples, split="train", output_path=clf_path)
+        p1_results = {**evaluate_tfidf_baseline(pipeline, samples), **provenance}
         p1_path = out_dir / f"{args.split}_p1_tfidf.json" if args.split != "val" else out_dir / "p1_tfidf.json"
         with open(p1_path, "w", encoding="utf-8") as f:
             json.dump(p1_results, f, indent=2)

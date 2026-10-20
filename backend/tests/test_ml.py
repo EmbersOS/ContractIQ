@@ -6,6 +6,7 @@ import json
 import pytest
 
 from ml.dataset import get_split_contracts, load_cuad, make_splits, verify_no_overlap
+from ml.evaluate import extract_held_out_samples, load_cuad_evaluation_data
 from ml.metrics import exact_match_score, span_iou_score, token_f1_score
 from ml.preprocess import GuardedSplitContext, LeakageError, chunk_text, clean_contract_text
 from ml.train_classifier import train_classifier
@@ -25,6 +26,75 @@ def _cuad_fixture() -> dict[str, object]:
             {"title": "license-agreement", "paragraphs": [{"context": "Governing law clause.", "qas": []}]},
         ]
     }
+
+
+def _cuad_eval_fixture() -> dict[str, object]:
+    clauses = [
+        ("Limitation of Liability", "Aggregate liability shall not exceed the fees paid."),
+        ("Indemnification", "Supplier shall indemnify and hold harmless Customer."),
+        ("Termination", "Either party may terminate for material breach."),
+        ("Governing Law", "This agreement is governed by the laws of New York."),
+        ("Confidentiality", "Each party shall keep proprietary information confidential."),
+        ("Warranty", "Services are provided without warranties of merchantability."),
+    ]
+    data = []
+    for index, (clause_type, span) in enumerate(clauses):
+        context = f"{index + 1}. {clause_type.upper()}. {span}\n{index + 2}. DEFINITIONS. Terms are defined here."
+        data.append(
+            {
+                "title": f"contract-{index}",
+                "paragraphs": [
+                    {
+                        "context": context,
+                        "qas": [
+                            {
+                                "question": f"What is the {clause_type} clause?",
+                                "answers": [{"text": span, "answer_start": context.index(span)}],
+                            }
+                        ],
+                    }
+                ],
+            }
+        )
+    return {"data": data}
+
+
+def test_cuad_evaluation_uses_only_held_out_contracts(tmp_path):
+    path = tmp_path / "cuad-eval.json"
+    path.write_text(json.dumps(_cuad_eval_fixture()), encoding="utf-8")
+    contracts = load_cuad(path)
+    splits = make_splits(contracts)
+
+    train_examples, samples = load_cuad_evaluation_data(path, "val")
+
+    assert train_examples
+    assert samples
+    sample_ids = {sample["contract_id"] for sample in samples}
+    assert sample_ids <= set(splits["val"])
+    assert not sample_ids & set(splits["train"])
+    assert not sample_ids & set(splits["test"])
+    for sample in samples:
+        assert sample["text"][sample["char_start"] : sample["char_end"]] == sample["gold_span"]
+
+
+def test_held_out_samples_repair_invalid_answer_offsets():
+    context = "1. TERMINATION. Either party may terminate with notice."
+    samples = extract_held_out_samples(
+        [
+            {
+                "contract_id": "contract-1",
+                "context": context,
+                "qas": [
+                    {
+                        "question": "What is the termination clause?",
+                        "answers": [{"text": "Either party may terminate with notice.", "answer_start": 9999}],
+                    }
+                ],
+            }
+        ]
+    )
+
+    assert samples[0]["char_start"] == context.index("Either party may terminate with notice.")
 
 
 def test_cuad_paragraphs_from_one_contract_share_a_split(tmp_path):
