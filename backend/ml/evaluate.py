@@ -8,7 +8,13 @@ from pathlib import Path
 from typing import Any
 
 from ml.dataset import get_split_contracts, load_cuad, make_splits
-from ml.metrics import compute_classification_metrics, exact_match_score, span_iou_score, token_f1_score
+from ml.metrics import (
+    compute_classification_metrics,
+    compute_span_detection_metrics,
+    exact_match_score,
+    span_iou_score,
+    token_f1_score,
+)
 
 VAL_BENCHMARK_SAMPLES = [
     {
@@ -200,11 +206,28 @@ def evaluate_tfidf_baseline(pipeline: Any, samples: list[dict[str, Any]]) -> dic
     f1_scores: list[float] = []
     iou_scores: list[float] = []
     predictions_by_contract: dict[str, list[Any]] = {}
+    gold_by_contract: dict[str, list[dict[str, Any]]] = {}
+    prediction_items_by_contract: dict[str, list[dict[str, Any]]] = {}
 
     for sample in samples:
         key = str(sample.get("contract_id") or sample["text"])
         if key not in predictions_by_contract:
             predictions_by_contract[key] = predict_candidate_clauses(pipeline, sample["text"])
+            prediction_items_by_contract[key] = [
+                {
+                    "clause_type": candidate.clause_type,
+                    "char_start": candidate.char_start,
+                    "char_end": candidate.char_end,
+                }
+                for candidate in predictions_by_contract[key]
+            ]
+        gold_by_contract.setdefault(key, []).append(
+            {
+                "clause_type": sample["gold_type"],
+                "char_start": sample["char_start"],
+                "char_end": sample["char_end"],
+            }
+        )
 
         gold_offsets = (sample["char_start"], sample["char_end"])
         y_true.append(sample["gold_type"])
@@ -234,13 +257,18 @@ def evaluate_tfidf_baseline(pipeline: Any, samples: list[dict[str, Any]]) -> dic
 
     evaluated_labels = sorted(set(y_true))
     cls_metrics = compute_classification_metrics(y_true, y_pred, labels=evaluated_labels)
+    span_detection = compute_span_detection_metrics(gold_by_contract, prediction_items_by_contract)
 
     return {
         "model": "P1_TFIDF_LogisticRegression",
         "num_samples": len(samples),
         "macro_f1": cls_metrics["macro_f1"],
         "evaluated_labels": evaluated_labels,
+        "classification_scope": "one prediction per gold sample selected by maximum span IoU",
         "classification": cls_metrics,
+        "span_metrics_scope": "localization quality of the sample-selected predictions",
+        "span_detection_scope": "prediction-level one-to-one matching; extras count as false positives",
+        "span_detection": span_detection,
         "span_metrics": {
             "mean_exact_match": round(sum(em_scores) / len(em_scores), 4) if em_scores else 0.0,
             "mean_token_f1": round(sum(f1_scores) / len(f1_scores), 4) if f1_scores else 0.0,

@@ -39,3 +39,31 @@ and predicted offsets remain relative to the original contract text. Use
 
 Without `--cuad-path`, the script falls back to the synthetic benchmark and marks
 `held_out_contracts: false` in the result JSON.
+
+## Final P1 pipeline
+
+1. Regex clause candidates are generated from the raw contract text.
+2. Each candidate is expanded to a sentence-like passage (minimum 120 characters,
+   maximum 1,000), and nested passages are suppressed by containment.
+3. Passages are cleaned with `clean_contract_text`, then classified by
+   TF-IDF (`ngram_range=(1, 2)`, `max_features=5000`, `sublinear_tf=True`) plus
+   logistic regression (`C=1.0`, `max_iter=1000`, `random_state=42`).
+4. The classifier is fitted only on the 357 train contracts (1,652 mapped
+   examples). Predicted offsets always refer to the original contract text.
+
+## Metric scopes
+
+- `classification`: sample-level classification. For each gold sample, the
+  highest-span-IoU prediction is selected, so unmatched extra predictions do not
+  affect this score.
+- `span_metrics`: localization quality (exact match, token F1, span IoU) of those
+  same sample-selected predictions.
+- `span_detection`: end-to-end prediction-level precision/recall/F1. Matching is
+  one-to-one, requires the same clause type, and requires span IoU >= 0.50; pairs
+  are matched highest-IoU first (ties by lower gold then prediction index). Every
+  unmatched prediction, including duplicates and wrong-type candidates, is a false
+  positive.
+- `candidate_coverage`: separate type-agnostic extraction recall. A gold span is
+  covered when any predicted span reaches IoU >= 0.50, even if classified as the
+  wrong type. `candidate_overlap_recall` is the same measure for any character
+  overlap, making missed clauses and span-extraction gaps visible.

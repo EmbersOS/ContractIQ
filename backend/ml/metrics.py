@@ -126,3 +126,161 @@ def compute_classification_metrics(
         "macro_f1": round(macro_f1, 4),
         "per_class": per_class,
     }
+
+
+def match_span_predictions(
+    gold: list[dict[str, Any]],
+    predictions: list[dict[str, Any]],
+    iou_threshold: float = 0.5,
+) -> dict[str, Any]:
+    """Greedily match spans one-to-one.
+
+    A pair is eligible when both spans have the same ``clause_type`` and their
+    character-span IoU is at least ``iou_threshold``. Eligible pairs are matched
+    highest-IoU first, with stable ties by lower gold index then lower prediction
+    index. Each gold span and each prediction can participate in at most one match.
+    """
+    eligible: list[tuple[float, int, int]] = []
+    for gold_index, gold_span in enumerate(gold):
+        for pred_index, prediction in enumerate(predictions):
+            if gold_span["clause_type"] != prediction["clause_type"]:
+                continue
+            iou = span_iou_score(
+                (prediction["char_start"], prediction["char_end"]),
+                (gold_span["char_start"], gold_span["char_end"]),
+            )
+            if iou >= iou_threshold:
+                eligible.append((iou, gold_index, pred_index))
+
+    eligible.sort(key=lambda item: (-item[0], item[1], item[2]))
+    matched_gold: set[int] = set()
+    matched_predictions: set[int] = set()
+    matches: list[tuple[int, int, float]] = []
+    for iou, gold_index, pred_index in eligible:
+        if gold_index in matched_gold or pred_index in matched_predictions:
+            continue
+        matched_gold.add(gold_index)
+        matched_predictions.add(pred_index)
+        matches.append((gold_index, pred_index, iou))
+
+    return {
+        "matches": matches,
+        "unmatched_gold": [index for index in range(len(gold)) if index not in matched_gold],
+        "unmatched_predictions": [
+            index for index in range(len(predictions)) if index not in matched_predictions
+        ],
+    }
+
+
+def compute_span_detection_metrics(
+    gold_by_contract: dict[str, list[dict[str, Any]]],
+    predictions_by_contract: dict[str, list[dict[str, Any]]],
+    iou_threshold: float = 0.5,
+) -> dict[str, Any]:
+    """Compute prediction-level span-detection precision, recall, and F1.
+
+    Matching is one-to-one by clause type and span IoU (see
+    :func:`match_span_predictions`). Every unmatched prediction is a false
+    positive, including duplicates and predictions with the wrong clause type.
+    Candidate coverage is type-agnostic: a gold span is covered when any
+    predicted span reaches ``iou_threshold``, so extraction misses remain visible
+    even when the classifier assigns the wrong type.
+    """
+    labels = sorted(
+        {span["clause_type"] for spans in gold_by_contract.values() for span in spans}
+    )
+    stats = {label: {"tp": 0, "fp": 0, "fn": 0, "covered": 0, "overlapped": 0} for label in labels}
+    total_tp = total_fp = total_fn = total_covered = total_overlapped = 0
+    gold_count = sum(len(spans) for spans in gold_by_contract.values())
+    prediction_count = sum(len(spans) for spans in predictions_by_contract.values())
+
+    contract_ids = set(gold_by_contract) | set(predictions_by_contract)
+    for contract_id in contract_ids:
+        gold = gold_by_contract.get(contract_id, [])
+        predictions = predictions_by_contract.get(contract_id, [])
+        matching = match_span_predictions(gold, predictions, iou_threshold)
+
+        matched_gold = {gold_index for gold_index, _, _ in matching["matches"]}
+        matched_predictions = {pred_index for _, pred_index, _ in matching["matches"]}
+        for gold_index, prediction_index, _ in matching["matches"]:
+            label = gold[gold_index]["clause_type"]
+            stats[label]["tp"] += 1
+            total_tp += 1
+
+        for gold_index, gold_span in enumerate(gold):
+            label = gold_span["clause_type"]
+            covered = any(
+                span_iou_score(
+                    (prediction["char_start"], prediction["char_end"]),
+                    (gold_span["char_start"], gold_span["char_end"]),
+                )
+                >= iou_threshold
+                for prediction in predictions
+            )
+            overlapped = any(
+                min(prediction["char_end"], gold_span["char_end"])
+                > max(prediction["char_start"], gold_span["char_start"])
+                for prediction in predictions
+            )
+            if covered:
+                stats[label]["covered"] += 1
+                total_covered += 1
+            if overlapped:
+                stats[label]["overlapped"] += 1
+                total_overlapped += 1
+            if gold_index not in matched_gold:
+                stats[label]["fn"] += 1
+                total_fn += 1
+
+        for prediction_index, prediction in enumerate(predictions):
+            if prediction_index in matched_predictions:
+                continue
+            label = prediction["clause_type"]
+            if label in stats:
+                stats[label]["fp"] += 1
+            total_fp += 1
+
+    per_class: dict[str, dict[str, float]] = {}
+    f1s: list[float] = []
+    for label, counts in stats.items():
+        tp, fp, fn = counts["tp"], counts["fp"], counts["fn"]
+        precision = tp / (tp + fp) if tp + fp else 0.0
+        recall = tp / (tp + fn) if tp + fn else 0.0
+        f1 = 2 * precision * recall / (precision + recall) if precision + recall else 0.0
+        support = tp + fn
+        per_class[label] = {
+            "precision": round(precision, 4),
+            "recall": round(recall, 4),
+            "f1": round(f1, 4),
+            "support": support,
+            "true_positives": tp,
+            "false_positives": fp,
+            "false_negatives": fn,
+            "candidate_coverage": round(counts["covered"] / support, 4) if support else 0.0,
+            "candidate_overlap_recall": round(counts["overlapped"] / support, 4) if support else 0.0,
+        }
+        f1s.append(f1)
+
+    precision = total_tp / (total_tp + total_fp) if total_tp + total_fp else 0.0
+    recall = total_tp / (total_tp + total_fn) if total_tp + total_fn else 0.0
+    f1 = 2 * precision * recall / (precision + recall) if precision + recall else 0.0
+
+    return {
+        "matching_rule": (
+            "one-to-one greedy matching; same clause_type; span IoU >= "
+            f"{iou_threshold:.2f}; highest IoU first; ties by lower gold then prediction index"
+        ),
+        "iou_threshold": iou_threshold,
+        "gold_spans": gold_count,
+        "predicted_spans": prediction_count,
+        "true_positives": total_tp,
+        "false_positives": total_fp,
+        "false_negatives": total_fn,
+        "precision": round(precision, 4),
+        "recall": round(recall, 4),
+        "f1": round(f1, 4),
+        "macro_f1": round(sum(f1s) / len(f1s), 4) if f1s else 0.0,
+        "candidate_coverage": round(total_covered / gold_count, 4) if gold_count else 0.0,
+        "candidate_overlap_recall": round(total_overlapped / gold_count, 4) if gold_count else 0.0,
+        "per_class": per_class,
+    }

@@ -7,7 +7,14 @@ import pytest
 
 from ml.dataset import get_split_contracts, load_cuad, make_splits, verify_no_overlap
 from ml.evaluate import evaluate_tfidf_baseline, extract_held_out_samples, load_cuad_evaluation_data
-from ml.metrics import compute_classification_metrics, exact_match_score, span_iou_score, token_f1_score
+from ml.metrics import (
+    compute_classification_metrics,
+    compute_span_detection_metrics,
+    exact_match_score,
+    match_span_predictions,
+    span_iou_score,
+    token_f1_score,
+)
 from ml.preprocess import GuardedSplitContext, LeakageError, chunk_text, clean_contract_text
 from ml.train_classifier import CUAD_CATEGORY_TO_TARGET, target_clause_for_question, train_classifier
 
@@ -154,6 +161,8 @@ def test_tfidf_evaluation_classifies_candidate_passages_not_whole_contracts():
 
     assert result["macro_f1"] == 1.0
     assert result["span_metrics"]["mean_span_iou"] > 0
+    assert result["span_detection"]["true_positives"] == 1
+    assert result["span_detection"]["false_positives"] == 0
     assert pipeline.inputs
     assert all(value != text for value in pipeline.inputs)
 
@@ -219,3 +228,72 @@ def test_classifier_trains_on_training_split_only():
         "Payment Terms",
         "Confidentiality",
     }
+
+def _span(clause_type: str, char_start: int, char_end: int) -> dict[str, object]:
+    return {"clause_type": clause_type, "char_start": char_start, "char_end": char_end}
+
+
+def test_span_detection_penalizes_unmatched_predictions():
+    metrics = compute_span_detection_metrics(
+        {"contract-1": [_span("Termination", 0, 10)]},
+        {"contract-1": [_span("Termination", 0, 10), _span("Termination", 20, 30)]},
+    )
+
+    assert metrics["true_positives"] == 1
+    assert metrics["false_positives"] == 1
+    assert metrics["false_negatives"] == 0
+    assert metrics["precision"] == 0.5
+    assert metrics["recall"] == 1.0
+    assert metrics["f1"] == 0.6667
+
+
+def test_span_detection_reports_missed_gold_spans():
+    metrics = compute_span_detection_metrics(
+        {"contract-1": [_span("Termination", 0, 10), _span("Warranty", 20, 30)]},
+        {"contract-1": [_span("Termination", 0, 10)]},
+    )
+
+    assert metrics["true_positives"] == 1
+    assert metrics["false_negatives"] == 1
+    assert metrics["recall"] == 0.5
+    assert metrics["f1"] == 0.6667
+    assert metrics["candidate_coverage"] == 0.5
+    assert metrics["candidate_overlap_recall"] == 0.5
+
+
+def test_span_detection_counts_duplicate_candidates_as_false_positives():
+    metrics = compute_span_detection_metrics(
+        {"contract-1": [_span("Termination", 0, 10)]},
+        {"contract-1": [_span("Termination", 0, 10), _span("Termination", 0, 10)]},
+    )
+
+    assert metrics["true_positives"] == 1
+    assert metrics["false_positives"] == 1
+    assert metrics["false_negatives"] == 0
+    assert metrics["precision"] == 0.5
+    assert metrics["recall"] == 1.0
+
+
+def test_span_detection_matching_is_one_to_one():
+    gold = [_span("Termination", 0, 10), _span("Termination", 0, 10)]
+    predictions = [_span("Termination", 0, 10)]
+
+    matching = match_span_predictions(gold, predictions)
+
+    assert len(matching["matches"]) == 1
+    assert len(matching["unmatched_gold"]) == 1
+    assert matching["unmatched_predictions"] == []
+
+
+def test_span_detection_coverage_is_type_agnostic():
+    metrics = compute_span_detection_metrics(
+        {"contract-1": [_span("Termination", 0, 10)]},
+        {"contract-1": [_span("Warranty", 0, 10)]},
+    )
+
+    assert metrics["true_positives"] == 0
+    assert metrics["false_positives"] == 1
+    assert metrics["false_negatives"] == 1
+    assert metrics["f1"] == 0.0
+    assert metrics["candidate_coverage"] == 1.0
+    assert metrics["candidate_overlap_recall"] == 1.0
