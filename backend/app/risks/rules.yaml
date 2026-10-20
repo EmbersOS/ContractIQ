@@ -1,0 +1,19 @@
+rules:
+  - id: unlimited-liability
+    clause_type: Limitation of Liability
+    risk_level: HIGH
+    patterns:
+      - "\\b(?:unlimited|without\\s+(?:limit|limitation)|no\\s+(?:limit|cap))\\b"
+    explanation: "Liability appears uncapped."
+  - id: immediate-termination
+    clause_type: Termination
+    risk_level: MEDIUM
+    patterns:
+      - "\\bterminate(?:d)?\\s+immediately\\b"
+    explanation: "Termination may occur immediately without a cure period."
+  - id: extended-payment-term
+    clause_type: Payment Terms
+    risk_level: MEDIUM
+    patterns:
+      - "\\bnet\\s+(?:[6-9]\\d|\\d{3,})\\b"
+    explanation: "Payment term exceeds sixty days."

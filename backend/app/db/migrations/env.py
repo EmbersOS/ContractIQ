@@ -16,6 +16,8 @@ from app.db.base import Base  # noqa: E402
 from app.auth.models import User  # noqa: E402, F401
 from app.contracts.models import Contract  # noqa: E402, F401
 from app.reviews.models import ReviewEvent  # noqa: E402, F401
+from app.clauses.models import ClauseEmbedding, ClausePrediction  # noqa: E402, F401
+from app.risks.models import RiskFinding  # noqa: E402, F401
 
 config = context.config
 
