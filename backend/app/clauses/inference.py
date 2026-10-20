@@ -11,6 +11,10 @@ from ml.train_classifier import TARGET_CLAUSES
 
 SUPPORTED_CLAUSE_TYPES = frozenset(TARGET_CLAUSES)
 
+# Low-confidence predictions are only credible when the regex anchor agrees.
+MIN_PREDICTION_CONFIDENCE = 0.55
+HIGH_CONFIDENCE_ANCHOR_FREE = 0.65
+
 
 @dataclass(frozen=True)
 class CandidatePrediction:
@@ -22,17 +26,17 @@ class CandidatePrediction:
 
 
 def predict_candidate_clauses(classifier: Any, source_text: str) -> list[CandidatePrediction]:
-    """Classify candidate passages and return predictions with raw-text offsets."""
+    """Classify candidate passages, filtering low-confidence unsupported anchors."""
     if not source_text.strip():
         return []
 
-    passages: dict[tuple[int, int], str] = {}
+    passages: dict[tuple[int, int], tuple[str, str]] = {}
     for candidate in find_clause_candidates(source_text):
         span_text, char_start, char_end = extract_candidate_passage(
             source_text, candidate.char_start, candidate.char_end
         )
         if span_text:
-            passages.setdefault((char_start, char_end), span_text)
+            passages.setdefault((char_start, char_end), (candidate.clause_type, span_text))
 
     if not passages:
         return []
@@ -44,7 +48,7 @@ def predict_candidate_clauses(classifier: Any, source_text: str) -> list[Candida
             continue
         offsets.append(key)
 
-    texts = [clean_contract_text(passages[key]) for key in offsets]
+    texts = [clean_contract_text(passages[key][1]) for key in offsets]
     labels = classifier.predict(texts)
     probabilities = classifier.predict_proba(texts) if hasattr(classifier, "predict_proba") else None
 
@@ -53,11 +57,16 @@ def predict_candidate_clauses(classifier: Any, source_text: str) -> list[Candida
         clause_type = str(labels[index])
         if clause_type not in SUPPORTED_CLAUSE_TYPES:
             continue
+        source_type, span_text = passages[(char_start, char_end)]
         confidence = float(max(probabilities[index])) if probabilities is not None else 1.0
+        if confidence < MIN_PREDICTION_CONFIDENCE:
+            continue
+        if confidence < HIGH_CONFIDENCE_ANCHOR_FREE and clause_type != source_type:
+            continue
         predictions.append(
             CandidatePrediction(
                 clause_type=clause_type,
-                span_text=passages[(char_start, char_end)],
+                span_text=span_text,
                 char_start=char_start,
                 char_end=char_end,
                 confidence=confidence,

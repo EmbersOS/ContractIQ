@@ -70,6 +70,30 @@ def test_unsupported_classifier_label_is_dropped():
     assert predict_candidate_clauses(classifier, "1. TERMINATION. Either party may terminate.") == []
 
 
+def test_low_confidence_prediction_is_dropped_even_with_anchor_agreement():
+    text = "1. LIMITATION OF LIABILITY. Supplier has unlimited liability for all claims."
+    classifier = _RecordingClassifier(label="Limitation of Liability", confidence=0.54)
+
+    assert predict_candidate_clauses(classifier, text) == []
+
+
+def test_moderate_confidence_prediction_requires_anchor_agreement():
+    text = "1. LIMITATION OF LIABILITY. Supplier has unlimited liability for all claims."
+
+    disagreement = _RecordingClassifier(label="Termination", confidence=0.6)
+    assert predict_candidate_clauses(disagreement, text) == []
+
+    agreement = _RecordingClassifier(label="Limitation of Liability", confidence=0.6)
+    assert len(predict_candidate_clauses(agreement, text)) == 1
+
+
+def test_high_confidence_prediction_survives_anchor_disagreement():
+    text = "1. LIMITATION OF LIABILITY. Supplier has unlimited liability for all claims."
+    classifier = _RecordingClassifier(label="Termination", confidence=0.65)
+
+    assert len(predict_candidate_clauses(classifier, text)) == 1
+
+
 def test_classifier_receives_cleaned_passage_text():
     text = "1. LIMITATION OF LIABILITY.\n\nSupplier\t has  unlimited liability for all claims."
     classifier = _RecordingClassifier()
