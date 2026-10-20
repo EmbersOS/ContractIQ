@@ -24,11 +24,13 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from websockets.sync.client import connect
 
+from app.config import settings
 from app.db.base import Base
 from app.db.session import get_db
 from app.dependencies import get_storage
 from app.main import create_app
 from app.storage.local import LocalStorageBackend
+from ml.train_classifier import train_from_cuad
 
 pytestmark = pytest.mark.browser
 
@@ -55,22 +57,16 @@ def _browser_path() -> str:
     pytest.skip("Chrome or Edge is required for the browser E2E test")
 
 
-def _e2e_classifier() -> Any:
-    """Train a real classifier on the train split so Stage 4 gates yield analysis."""
+def _build_e2e_artifact(artifact_path: Path) -> None:
+    """Build a real CUAD train-only artifact for the normal application loader."""
     cuad_path = Path(__file__).resolve().parents[1] / "data" / "cuad" / "CUAD_v1.json"
     if not cuad_path.is_file():
         pytest.skip("CUAD v1 data is required to build the browser E2E classifier fixture")
 
-    from ml.dataset import get_split_contracts, load_cuad, make_splits
-    from ml.train_classifier import extract_training_examples, train_classifier
-
-    contracts = load_cuad(cuad_path)
-    splits = make_splits(contracts)
-    train_contracts = get_split_contracts(contracts, splits, "train")
-    train_examples = extract_training_examples(train_contracts)
-    if not train_examples:
-        pytest.skip("CUAD train split did not provide classifier examples")
-    return train_classifier(train_examples, split="train")
+    try:
+        train_from_cuad(cuad_path, artifact_path)
+    except (FileNotFoundError, ValueError) as exc:
+        pytest.skip(str(exc))
 
 
 def _wait_http(url: str, timeout: float = 15.0) -> None:
@@ -152,12 +148,12 @@ class _CdpClient:
 def e2e_stack(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[str, Any]]:
     """Run the real app with an isolated DB/storage and a fresh browser profile."""
     browser = _browser_path()
-    classifier = _e2e_classifier()
     from app.contracts import service as contract_service
 
-    # The bundled sample-corpus fallback scores below Stage 4's confidence gate.
-    # Use a real CUAD train-only model so the E2E exercises non-empty analysis.
-    monkeypatch.setattr(contract_service, "_get_classifier", lambda: classifier)
+    artifact_path = tmp_path / "e2e_classifier.joblib"
+    _build_e2e_artifact(artifact_path)
+    monkeypatch.setattr(settings, "CLAUSE_MODEL_PATH", str(artifact_path))
+    contract_service._get_classifier.cache_clear()
 
     database_path = tmp_path / "e2e.db"
     upload_dir = tmp_path / "uploads"
@@ -242,6 +238,7 @@ def e2e_stack(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple
         server.should_exit = True
         server_thread.join(timeout=10)
         engine.dispose()
+        contract_service._get_classifier.cache_clear()
 
 
 def _write_contract_fixture(path: Path) -> None:

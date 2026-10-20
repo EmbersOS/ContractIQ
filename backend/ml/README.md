@@ -24,6 +24,31 @@ Remove-Item backend/data/cuad/CUAD_v1.zip
 
 On macOS/Linux, use `curl -L`, `unzip`, and `cp` for the same steps.
 
+## Build the application classifier artifact
+
+From `backend/`, after downloading CUAD:
+
+```bash
+python -m ml.train_classifier --cuad-path data/cuad/CUAD_v1.json
+```
+
+This selects only the 357 train contracts, applies text cleaning, fits TF-IDF
+vectorization and logistic regression, and writes the complete pipeline to
+`ml/results/tfidf_classifier.joblib`. There is no synthetic fallback: a missing
+or empty CUAD train split fails the command.
+
+The artifact is intentionally ignored by Git and must be provisioned for each
+deployment. Set `CLAUSE_MODEL_PATH` to override the default; relative paths
+resolve from `backend/`. The API loads the artifact lazily once per worker on
+the first contract analysis. If it is missing, corrupt, or incompatible, contract
+processing fails with a clear `error_message` instead of silently using a weaker
+model. Rebuild the artifact in the target Python/scikit-learn environment if a
+pickle-compatibility error occurs. Only load artifacts you generated or trust,
+because joblib uses pickle.
+
+For Docker, generate the artifact before building the backend image, or mount it
+at `/app/ml/results/tfidf_classifier.joblib`.
+
 ## Run held-out evaluation
 
 From `backend/`:

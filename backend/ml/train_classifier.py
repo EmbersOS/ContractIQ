@@ -10,6 +10,8 @@ from typing import Any
 from ml.dataset import get_split_contracts, load_cuad, make_splits
 from ml.preprocess import GuardedSplitContext, clean_contract_text
 
+DEFAULT_ARTIFACT_PATH = Path("ml/results/tfidf_classifier.joblib")
+
 # Target clause categories
 TARGET_CLAUSES = [
     "Limitation of Liability",
@@ -122,24 +124,57 @@ def train_classifier(
         return pipeline
 
 
+def load_cuad_training_examples(cuad_path: str | Path) -> list[tuple[str, str]]:
+    """Load mapped training examples from the CUAD train split only."""
+    path = Path(cuad_path)
+    if not path.is_file():
+        raise FileNotFoundError(f"CUAD dataset not found at {path}")
+
+    contracts = load_cuad(path)
+    splits = make_splits(contracts)
+    train_contracts = get_split_contracts(contracts, splits, "train")
+    train_examples = extract_training_examples(train_contracts)
+    if not train_examples:
+        raise ValueError(f"CUAD train split at {path} did not provide any mapped examples")
+    return train_examples
+
+
+def train_from_cuad(
+    cuad_path: str | Path,
+    output_path: str | Path = DEFAULT_ARTIFACT_PATH,
+) -> tuple[Any, int]:
+    """Fit and persist the classifier artifact using CUAD train contracts only."""
+    train_examples = load_cuad_training_examples(cuad_path)
+    pipeline = train_classifier(
+        train_examples,
+        split="train",
+        output_path=output_path,
+    )
+    return pipeline, len(train_examples)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Train ContractIQ clause classifier.")
-    parser.add_argument("--cuad-path", type=str, default=None, help="Path to CUAD v1 JSON file")
-    parser.add_argument("--output", type=str, default="ml/results/tfidf_classifier.joblib")
+    parser.add_argument(
+        "--cuad-path",
+        type=str,
+        default="data/cuad/CUAD_v1.json",
+        help="Path to CUAD v1 JSON file (required; no synthetic fallback)",
+    )
+    parser.add_argument(
+        "--output",
+        type=str,
+        default=str(DEFAULT_ARTIFACT_PATH),
+        help="Output path for the joblib artifact",
+    )
     args = parser.parse_args()
 
-    if args.cuad_path and Path(args.cuad_path).exists():
-        contracts = load_cuad(args.cuad_path)
-        splits = make_splits(contracts)
-        train_contracts = get_split_contracts(contracts, splits, "train")
-        train_examples = extract_training_examples(train_contracts)
-        if not train_examples:
-            train_examples = SAMPLE_TRAIN_CORPUS
-    else:
-        train_examples = SAMPLE_TRAIN_CORPUS
+    try:
+        _, example_count = train_from_cuad(args.cuad_path, args.output)
+    except (FileNotFoundError, ValueError) as exc:
+        parser.error(str(exc))
 
-    pipeline = train_classifier(train_examples, split="train", output_path=args.output)
-    print(f"Classifier trained on {len(train_examples)} examples and saved to {args.output}")
+    print(f"Classifier trained on {example_count} CUAD train examples and saved to {args.output}")
 
 
 if __name__ == "__main__":

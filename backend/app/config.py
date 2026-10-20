@@ -21,6 +21,9 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
 
+    # Clause classifier
+    CLAUSE_MODEL_PATH: str = "ml/results/tfidf_classifier.joblib"
+
     # Storage
     STORAGE_BACKEND: str = "local"
     UPLOAD_DIR: str = "./uploads"

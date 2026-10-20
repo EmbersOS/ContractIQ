@@ -16,7 +16,12 @@ from ml.metrics import (
     token_f1_score,
 )
 from ml.preprocess import GuardedSplitContext, LeakageError, chunk_text, clean_contract_text
-from ml.train_classifier import CUAD_CATEGORY_TO_TARGET, target_clause_for_question, train_classifier
+from ml.train_classifier import (
+    CUAD_CATEGORY_TO_TARGET,
+    load_cuad_training_examples,
+    target_clause_for_question,
+    train_classifier,
+)
 
 
 def _cuad_fixture() -> dict[str, object]:
@@ -228,6 +233,34 @@ def test_classifier_trains_on_training_split_only():
         "Payment Terms",
         "Confidentiality",
     }
+
+
+def test_cuad_artifact_examples_come_from_train_split_only(tmp_path):
+    path = tmp_path / "cuad-models.json"
+    path.write_text(json.dumps(_cuad_eval_fixture()), encoding="utf-8")
+    contracts = load_cuad(path)
+    splits = make_splits(contracts)
+
+    def answers_for(split_name: str) -> set[str]:
+        return {
+            answer["text"]
+            for contract in get_split_contracts(contracts, splits, split_name)
+            for qa in contract["qas"]
+            for answer in qa["answers"]
+        }
+
+    examples = load_cuad_training_examples(path)
+    example_texts = {text for text, _ in examples}
+
+    assert example_texts == answers_for("train")
+    assert not example_texts & answers_for("val")
+    assert not example_texts & answers_for("test")
+
+
+def test_cuad_artifact_requires_dataset_instead_of_sample_fallback(tmp_path):
+    with pytest.raises(FileNotFoundError):
+        load_cuad_training_examples(tmp_path / "missing.json")
+
 
 def _span(clause_type: str, char_start: int, char_end: int) -> dict[str, object]:
     return {"clause_type": clause_type, "char_start": char_start, "char_end": char_end}

@@ -19,6 +19,30 @@ from app.main import create_app
 from app.storage.local import LocalStorageBackend
 
 # ---------------------------------------------------------------------------
+# Shared classifier artifact
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(scope="session", autouse=True)
+def _test_classifier_artifact(tmp_path_factory):
+    """Provide a disposable classifier artifact so tests never depend on local models."""
+    from app.config import settings
+    from app.contracts import service as contract_service
+    from ml.train_classifier import SAMPLE_TRAIN_CORPUS, train_classifier
+
+    artifact_path = tmp_path_factory.mktemp("classifier") / "test_classifier.joblib"
+    train_classifier(SAMPLE_TRAIN_CORPUS, split="train", output_path=artifact_path)
+
+    original_path = settings.CLAUSE_MODEL_PATH
+    settings.CLAUSE_MODEL_PATH = str(artifact_path)
+    contract_service._get_classifier.cache_clear()
+    try:
+        yield artifact_path
+    finally:
+        settings.CLAUSE_MODEL_PATH = original_path
+        contract_service._get_classifier.cache_clear()
+
+
+# ---------------------------------------------------------------------------
 # In-memory SQLite engine
 # ---------------------------------------------------------------------------
 

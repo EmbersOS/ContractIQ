@@ -11,19 +11,20 @@ from sqlalchemy.orm import Session
 
 from app.clauses.inference import predict_candidate_clauses
 from app.clauses.models import ClausePrediction
+from app.config import settings
 from app.contracts.clause_candidates import candidates_to_dict, find_clause_candidates
 from app.contracts.extractor import extract_docx, extract_pdf
 from app.contracts.models import Contract
 from app.risks.service import persist_risk_findings
 from app.storage.base import StorageBackend
+from ml.model_artifact import load_classifier_artifact, resolve_model_artifact_path
 
 
 @lru_cache(maxsize=1)
 def _get_classifier() -> Any:
-    """Build the deterministic Stage 2 baseline once per worker process."""
-    from ml.train_classifier import SAMPLE_TRAIN_CORPUS, train_classifier
-
-    return train_classifier(SAMPLE_TRAIN_CORPUS)
+    """Load the configured classifier artifact once per worker process."""
+    artifact_path = resolve_model_artifact_path(settings.CLAUSE_MODEL_PATH)
+    return load_classifier_artifact(artifact_path)
 
 
 def _persist_clause_analysis(
